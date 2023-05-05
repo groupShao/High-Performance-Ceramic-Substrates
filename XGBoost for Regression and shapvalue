@@ -1,0 +1,95 @@
+import numpy as np
+import pandas as pd
+from sklearn.model_selection import train_test_split
+import xgboost as xgb
+from xgboost import XGBRegressor
+import matplotlib.pyplot as plt
+from sklearn import metrics
+from sklearn.model_selection import GridSearchCV
+from sklearn.model_selection import KFold
+from xgboost import plot_importance
+import joblib
+import shap
+
+data = pd.read_csv('data_al2O3.csv')
+cols = ['h0','h1','h2','h3','h4','h5','h6','h8','h9','h10','h11','h12','h13','h14','h15','h16',
+        'h22','h23','h24','h25','h26','h27','h28'] 
+train_x, test_x, train_y, test_y = train_test_split(data[cols].values, data['rd'].values,test_size=0.2, random_state= 21)
+
+#Tuning Model Parameters
+parameters = {
+   'n_estimators': [300, 400, 500,600,700,800],
+   'min_child_weight': [1, 2, 3, 4, 5, 6],
+   'max_depth': [3,4,5,6,7,8,9,10],
+   'subsample': [0.6, 0.7, 0.8, 0.85, 0.95],
+   'colsample_bytree': [0.5, 0.6, 0.7, 0.8, 0.9],
+   'learning_rate': [0.01, 0.02, 0.05, 0.1, 0.15]
+}
+
+bst = xgb.XGBRegressor(colsample_bylevel = 1, 
+                       colsample_bytree = 0.65,
+                       gamma = 0, 
+                       learning_rate = 0.1,
+                       max_delta_step = 0, 
+                       max_depth =5,
+                       min_child_weight = 3,
+                      n_estimators = 700, 
+                       nthread = -1,
+                       objective = 'reg:squarederror', 
+                       reg_alpha = 1,
+                       reg_lambda = 1, 
+                       scale_pos_weight = 0, 
+                       seed = 1000, 
+                       subsample =0.85)
+
+gsearch = GridSearchCV(bst, param_grid=parameters, scoring='accuracy', cv=3)
+gsearch.fit(train_x, train_y)
+print("Best score: %0.3f" % gsearch.best_score_)
+print("Best parameters set:")
+best_parameters = gsearch.best_estimator_.get_params()
+for param_name in sorted(parameters.keys()):
+    print("\t%s: %r" % (param_name, best_parameters[param_name]))
+    
+#Regression model building
+bst = xgb.XGBRegressor(colsample_bylevel = 1, 
+                       colsample_bytree = 0.65,
+                       gamma = 0, 
+                       learning_rate = 0.1,
+                       max_delta_step = 0, 
+                       max_depth =5,
+                       min_child_weight = 3,
+                      n_estimators = 700, 
+                       nthread = -1,
+                       objective = 'reg:squarederror', 
+                       reg_alpha = 1,
+                       reg_lambda = 1, 
+                       scale_pos_weight = 0, 
+                       seed = 1000, #silent = True, 
+                       subsample =0.85)
+xxx = bst.fit(train_x, train_y,verbose = True)
+preds = bst.predict(test_x)
+preds_train = bst.predict(train_x)
+joblib.dump(bst,'model.dat')
+
+print('train_r2_score:%f'%metrics.r2_score(train_y,preds_train))
+print('r2_score:%f'%metrics.r2_score(test_y,preds))
+print('train_MSE:%f'%metrics.mean_squared_error(train_y,preds_train))
+print('MSE:%f'%metrics.mean_squared_error(test_y,preds))
+print('train_MAE:%f'%metrics.mean_absolute_error(train_y,preds_train))
+print('MAE:%f'%metrics.mean_absolute_error(test_y,preds))
+
+#Feature importance
+model = joblib.load('model.dat')
+model.get_booster().feature_names = ['h0','h1','h2','h3','h4','h5','h6','h8','h9','h10','h11','h12','h13','h14','h15','h16',
+        'h22','h23','h24','h25','h26','h27','h28'] 
+xgb.plot_importance(model.get_booster(),max_num_features=10)
+
+#Shap value
+explainer = shap.TreeExplainer(bst)
+shap_values = explainer.shap_values(data[cols])
+shap.summary_plot(shap_values, data[cols])#Overall analysis of features
+
+shap.dependence_plot('h28', shap_values, data[cols], interaction_index=None, show=False)#Partial dependency graph
+
+shap.initjs()
+shap.force_plot(explainer.expected_value, shap_values[47], data[cols].iloc[47])#One-sample feature effects
