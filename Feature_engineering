@@ -1,0 +1,58 @@
+import numpy as np
+import pandas as pd
+from sklearn.model_selection import train_test_split
+from sklearn.model_selection import StratifiedKFold,KFold
+
+data = pd.read_csv('sintering_additive.csv')
+train, test = train_test_split(data, test_size = 0.3,random_state = 2023)
+
+n_folds = 20
+n_inner_folds = 10
+likelihood_encoded = pd.Series()
+likelihood_coding_map = {}
+
+oof_default_mean = train['target'].mean()      # global prior mean
+kf = KFold(n_splits=n_folds, shuffle=True)
+oof_mean_cv = pd.DataFrame()
+split = 0
+
+for infold, oof in kf.split(train['chemicals']):
+    print ('==============level 1 encoding..., fold %s ============' % split)
+    inner_kf = KFold(n_splits=n_inner_folds, shuffle=True)
+    inner_oof_default_mean = train.iloc[infold]['target'].mean()
+    inner_split = 0
+    inner_oof_mean_cv = pd.DataFrame()
+
+    likelihood_encoded_cv = pd.Series()
+    for inner_infold, inner_oof in inner_kf.split(train.iloc[infold]):
+        print ('==============level 2 encoding..., inner fold %s ============' % inner_split)
+        # inner out of fold mean
+        oof_mean = train.iloc[inner_infold].groupby(by=train['chemicals'])['target'].mean()
+        # assign oof_mean to the infold
+        likelihood_encoded_cv = likelihood_encoded_cv.append(train.iloc[infold].apply(
+            lambda x : oof_mean[x['chemicals']]
+            if x['chemicals'] in oof_mean.index
+            else inner_oof_default_mean, axis = 1))
+        inner_oof_mean_cv = inner_oof_mean_cv.join(pd.DataFrame(oof_mean), rsuffix=inner_split, how='outer')
+        inner_oof_mean_cv.fillna(inner_oof_default_mean, inplace=True)
+        inner_split += 1
+    
+    oof_mean_cv = oof_mean_cv.join(pd.DataFrame(inner_oof_mean_cv), rsuffix=split, how='outer')
+    oof_mean_cv.fillna(value=oof_default_mean, inplace=True)
+    split += 1
+    print ('============final mapping...===========')
+    likelihood_encoded = likelihood_encoded.append(train.iloc[oof].apply(
+        lambda x: np.mean(inner_oof_mean_cv.loc[x['chemicals']].values)
+        if x['chemicals'] in inner_oof_mean_cv.index
+        else oof_default_mean, axis=1))
+
+######################################### map into test dataframe
+train['chemicals'] = likelihood_encoded
+likelihood_coding_mapping = oof_mean_cv.mean(axis = 1)
+default_coding = oof_default_mean
+
+likelihood_coding_map['chemicals'] = (likelihood_coding_mapping, default_coding)
+mapping, default_mean = likelihood_coding_map['chemicals']
+test['chemicals'] = test.apply(lambda x : mapping[x['chemicals']]
+                                       if x['chemicals'] in mapping
+                                       else default_mean,axis = 1)
